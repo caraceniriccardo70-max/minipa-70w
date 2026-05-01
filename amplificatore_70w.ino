@@ -39,14 +39,13 @@
 // ============================================================
 // L298N — Ventole di raffreddamento
 // ============================================================
-#define PIN_FAN1_PWM    26   // ENA  — PWM ventola 1 (ledc canale 0)
+#define PIN_FAN1_PWM    26   // ENA  — PWM ventola 1 (ledcAttach 20kHz)
 #define PIN_FAN1_DIR     4   // IN1  — direzione ventola 1 (sempre HIGH)
-#define PIN_FAN2_PWM    18   // ENB  — PWM ventola 2 (ledc canale 1)
+#define PIN_FAN2_PWM    18   // ENB  — PWM ventola 2 (ledcAttach 20kHz)
 #define PIN_FAN2_DIR    19   // IN3  — direzione ventola 2 (sempre HIGH)
 #define FAN_PWM_FREQ    20000  // 20 kHz (inudibile)
 #define FAN_PWM_RES         8  // 8 bit → 0-255
-#define FAN_CH1             0  // ledc canale 0
-#define FAN_CH2             1  // ledc canale 1
+
 
 // ============================================================
 // TFT SPI Display (es. ILI9341 — non ancora implementato, pin riservati)
@@ -534,9 +533,9 @@ h1{color:#00ff88;text-align:center;padding:15px 0 5px;font-size:1.4em;letter-spa
       <tr><td>SDA I2C (LCD ATU-100)</td><td>21</td><td>I2C</td><td></td></tr>
       <tr><td>SCL I2C (LCD ATU-100)</td><td>22</td><td>I2C</td><td></td></tr>
       <tr><td>LED Status</td><td>2</td><td>OUT</td><td>⚠ Condiviso con TFT_DC</td></tr>
-      <tr style="color:#00cc66"><td><b>FAN1 PWM (ENA)</b></td><td><b>26</b></td><td>OUT/PWM</td><td>L298N — ledc ch0 20kHz</td></tr>
+      <tr style="color:#00cc66"><td><b>FAN1 PWM (ENA)</b></td><td><b>26</b></td><td>OUT/PWM</td><td>L298N — ledcAttach 20kHz</td></tr>
       <tr style="color:#00cc66"><td><b>FAN1 DIR (IN1)</b></td><td><b>4</b></td><td>OUT</td><td>L298N — sempre HIGH</td></tr>
-      <tr style="color:#00cc66"><td><b>FAN2 PWM (ENB)</b></td><td><b>18</b></td><td>OUT/PWM</td><td>L298N — ledc ch1 ⚠ TFT CLK</td></tr>
+      <tr style="color:#00cc66"><td><b>FAN2 PWM (ENB)</b></td><td><b>18</b></td><td>OUT/PWM</td><td>L298N — ledcAttach 20kHz ⚠ TFT CLK</td></tr>
       <tr style="color:#00cc66"><td><b>FAN2 DIR (IN3)</b></td><td><b>19</b></td><td>OUT</td><td>L298N — sempre HIGH ⚠ TFT MISO</td></tr>
       <tr style="color:#888"><td>TFT CS</td><td>15</td><td>OUT</td><td>Riservato — non implementato</td></tr>
       <tr style="color:#888"><td>TFT DC</td><td>2</td><td>OUT</td><td>⚠ Conflitto con LED_STATUS</td></tr>
@@ -878,27 +877,25 @@ void setupPins() {
 }
 
 void setupFans() {
-  ledcSetup(FAN_CH1, FAN_PWM_FREQ, FAN_PWM_RES);
-  ledcAttachPin(PIN_FAN1_PWM, FAN_CH1);
-  ledcSetup(FAN_CH2, FAN_PWM_FREQ, FAN_PWM_RES);
-  ledcAttachPin(PIN_FAN2_PWM, FAN_CH2);
+  ledcAttach(PIN_FAN1_PWM, FAN_PWM_FREQ, FAN_PWM_RES);
+  ledcAttach(PIN_FAN2_PWM, FAN_PWM_FREQ, FAN_PWM_RES);
   pinMode(PIN_FAN1_DIR, OUTPUT);
   digitalWrite(PIN_FAN1_DIR, HIGH);
   pinMode(PIN_FAN2_DIR, OUTPUT);
   digitalWrite(PIN_FAN2_DIR, HIGH);
-  ledcWrite(FAN_CH1, 0);
-  ledcWrite(FAN_CH2, 0);
+  ledcWrite(PIN_FAN1_PWM, 0);
+  ledcWrite(PIN_FAN2_PWM, 0);
   Serial.println(F("Ventole L298N inizializzate (OFF)"));
 }
 
 void setFan1(uint8_t speed) {
   g_fan1Speed = speed;
-  ledcWrite(FAN_CH1, speed);
+  ledcWrite(PIN_FAN1_PWM, speed);
 }
 
 void setFan2(uint8_t speed) {
   g_fan2Speed = speed;
-  ledcWrite(FAN_CH2, speed);
+  ledcWrite(PIN_FAN2_PWM, speed);
 }
 
 void setupWiFi() {
