@@ -78,6 +78,8 @@ String  g_staSSID   = "";
 String  g_staPass   = "";
 
 // --- Stato relè (1=ON, 0=OFF) per i 7 relè ---
+// Array a indicizzazione 1-based: g_relay[0] non utilizzato, g_relay[1..7] = i sette relè
+// Questa scelta rende il codice più leggibile (relay 1 = g_relay[1], ecc.)
 bool g_relay[8]   = {false, false, false, false, false, false, false, false};
 // Indici: 1=LPF15/10, 2=LPF20/17, 3=LPF40, 4=LPF80, 5=TUNE, 6=PTT, 7=ANT
 
@@ -813,6 +815,8 @@ void savePreferences() {
 
 // Mappa indice relè (1..7) → pin fisico
 void applyRelayPin(int relay, bool state) {
+  // Array 1-based: pins[0] è uno placeholder (0) non usato mai,
+  // pins[1..7] corrispondono ai pin fisici dei sette relè
   const int pins[] = {0,
     PIN_RELAY1_LPF1510,
     PIN_RELAY2_LPF2017,
@@ -1072,8 +1076,13 @@ void parseLCDContent() {
     String& row = (ri == 0) ? l1 : l2;
     int wIdx = row.indexOf('W');
     while (wIdx > 0) {
+      // Troviamo l'inizio del numero precedente la 'W'
       int start = wIdx - 1;
-      while (start > 0 && (isdigit(row[start - 1]) || row[start - 1] == '.')) start--;
+      // Scorriamo all'indietro finché ci sono cifre o punto decimale
+      // La condizione `start > 0` garantisce che row[start-1] sia sempre valido (indice >= 0)
+      while (start > 0 && (isdigit(row[start - 1]) || row[start - 1] == '.')) {
+        start--;
+      }
       String numStr = row.substring(start, wIdx);
       if (numStr.length() > 0) {
         float v = numStr.toFloat();
@@ -1092,9 +1101,9 @@ void parseLCDContent() {
   if (swrIdx < 0) swrIdx = all.indexOf("ROE");
   if (swrIdx < 0) swrIdx = all.indexOf("swr");
   if (swrIdx >= 0) {
-    // Cerca il numero dopo ':'  o spazio
+    // Cerca ':' dopo l'etichetta SWR/ROE; indexOf restituisce -1 se non trovato
     int colonIdx = all.indexOf(':', swrIdx);
-    if (colonIdx > 0 && colonIdx < swrIdx + 6) {
+    if (colonIdx >= swrIdx && colonIdx < swrIdx + 6) {
       String sub = all.substring(colonIdx + 1, colonIdx + 7);
       sub.trim();
       float v = sub.toFloat();
