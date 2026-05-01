@@ -33,7 +33,7 @@
 #define PIN_RELAY4_LPF80     27   // Relè 4 — LPF 80m      (HIGH = attivo)
 #define PIN_RELAY5_TUNE      32   // Relè 5 — ATU-100 TUNE (HIGH = attivo)
 #define PIN_RELAY6_PTT       25   // Relè 6 — Minipa PTT   (HIGH = TX)
-#define PIN_RELAY7_ANT       33   // Relè 7 — Switch ANT   (HIGH=ANT1, LOW=ANT2)
+#define PIN_RELAY7_ANT       35   // Relè 7 — Switch ANT   (HIGH=ANT1, LOW=ANT2)
 #define PIN_LED_STATUS        2   // LED di stato on-board
 
 // ============================================================
