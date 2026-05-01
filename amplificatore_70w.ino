@@ -37,6 +37,32 @@
 #define PIN_LED_STATUS        2   // LED di stato on-board
 
 // ============================================================
+// L298N — Ventole di raffreddamento
+// ============================================================
+#define PIN_FAN1_PWM    26   // ENA  — PWM ventola 1 (ledc canale 0)
+#define PIN_FAN1_DIR     4   // IN1  — direzione ventola 1 (sempre HIGH)
+#define PIN_FAN2_PWM    18   // ENB  — PWM ventola 2 (ledc canale 1)
+#define PIN_FAN2_DIR    19   // IN3  — direzione ventola 2 (sempre HIGH)
+#define FAN_PWM_FREQ    20000  // 20 kHz (inudibile)
+#define FAN_PWM_RES         8  // 8 bit → 0-255
+#define FAN_CH1             0  // ledc canale 0
+#define FAN_CH2             1  // ledc canale 1
+
+// ============================================================
+// TFT SPI Display (es. ILI9341 — non ancora implementato, pin riservati)
+// ============================================================
+// ATTENZIONE: GPIO 2 condiviso con LED_STATUS; GPIO 18/19 condivisi con L298N
+#define PIN_TFT_CS      15   // Chip Select display
+#define PIN_TFT_DC       2   // Data/Command  ⚠ condiviso con LED_STATUS
+#define PIN_TFT_RST      0   // Reset display (usa -1 se collegato a RST board)
+#define PIN_TFT_MOSI    23   // SPI MOSI
+#define PIN_TFT_CLK     18   // SPI CLK      ⚠ condiviso con FAN2_PWM
+#define PIN_TFT_MISO    19   // SPI MISO     ⚠ condiviso con FAN2_DIR
+// Touch XPT2046
+#define PIN_TOUCH_CS     5   // Touch Chip Select
+#define PIN_TOUCH_IRQ   34   // Touch IRQ (input only)
+
+// ============================================================
 // COSTANTI I2C / LCD
 // ============================================================
 #define I2C_SDA              21
@@ -130,6 +156,10 @@ String g_serialBuf = "";
 // STA riconnessione
 unsigned long g_lastStaAttemptMs = 0;
 
+// --- Ventole L298N ---
+uint8_t g_fan1Speed = 0;   // 0-255
+uint8_t g_fan2Speed = 0;   // 0-255
+
 // ============================================================
 // FORWARD DECLARATIONS
 // ============================================================
@@ -145,6 +175,10 @@ void setPTT(bool on);
 void setAnt(int ant);
 void triggerTune();
 void applyRelayPin(int relay, bool state);
+
+void setupFans();
+void setFan1(uint8_t speed);
+void setFan2(uint8_t speed);
 
 void handleLED();
 void handleTunePulse();
@@ -162,6 +196,7 @@ void handleBand();
 void handlePTT();
 void handleAnt();
 void handleTune();
+void handleFan();
 void handleWiFiConnect();
 void handleWiFiDisconnect();
 void handleWiFiScan();
@@ -269,6 +304,14 @@ h1{color:#00ff88;text-align:center;padding:15px 0 5px;font-size:1.4em;letter-spa
 /* Cmd list */
 .cmd-list{font-family:'Courier New',monospace;font-size:.8em;line-height:2.1;color:#888}
 .cmd-list .cmd{color:#00ff88}
+/* Fan controls */
+.fan-row{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.fan-slider{flex:1;-webkit-appearance:none;appearance:none;height:6px;border-radius:3px;background:#2a2a2a;outline:none}
+.fan-slider::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:#00ff88;cursor:pointer}
+.fan-slider::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:#00ff88;cursor:pointer;border:none}
+.fan-val{color:#00ff88;font-family:monospace;font-size:.9em;min-width:38px;text-align:right}
+.fan-led{width:11px;height:11px;border-radius:50%;background:#1e1e1e;flex-shrink:0;transition:.3s}
+.fan-led.on{background:#00ff88;box-shadow:0 0 6px #00ff88}
 </style>
 </head>
 <body>
@@ -323,6 +366,26 @@ h1{color:#00ff88;text-align:center;padding:15px 0 5px;font-size:1.4em;letter-spa
     <button class="tune-btn" id="tuneBtn" onclick="doTune()">▶ TUNE</button>
   </div>
 
+  <div class="section">
+    <h3>🌀 VENTOLE DI RAFFREDDAMENTO (L298N)</h3>
+    <div class="fan-row">
+      <div class="fan-led" id="fanLed1"></div>
+      <span style="color:#777;font-size:.82em;min-width:70px">Ventola 1</span>
+      <input type="range" class="fan-slider" id="fan1Slider" min="0" max="100" value="0" oninput="onFan1Input(this.value)">
+      <span class="fan-val" id="fan1Val">0%</span>
+    </div>
+    <div class="fan-row">
+      <div class="fan-led" id="fanLed2"></div>
+      <span style="color:#777;font-size:.82em;min-width:70px">Ventola 2</span>
+      <input type="range" class="fan-slider" id="fan2Slider" min="0" max="100" value="0" oninput="onFan2Input(this.value)">
+      <span class="fan-val" id="fan2Val">0%</span>
+    </div>
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn btn-ok" onclick="setFanBoth(100)">💨 Entrambe 100%</button>
+      <button class="btn btn-danger" onclick="setFanBoth(0)">⏹ Spegni</button>
+    </div>
+  </div>
+
 </div>
 
 <!-- ==================== TAB 1: MONITOR ==================== -->
@@ -362,6 +425,14 @@ h1{color:#00ff88;text-align:center;padding:15px 0 5px;font-size:1.4em;letter-spa
       <div class="relay-item"><div class="relay-led" id="rl5"></div><div class="relay-name">Relè 5<br>ATU TUNE (GPIO32)</div></div>
       <div class="relay-item"><div class="relay-led" id="rl6"></div><div class="relay-name">Relè 6<br>PTT (GPIO25)</div></div>
       <div class="relay-item"><div class="relay-led" id="rl7"></div><div class="relay-name">Relè 7<br>ANT Switch (GPIO33)</div></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h3>🌀 STATO VENTOLE</h3>
+    <div class="relay-grid">
+      <div class="relay-item"><div class="fan-led" id="monFanLed1"></div><div class="relay-name">Ventola 1<br><span id="monFan1Pct">0%</span> (GPIO26 ENA)</div></div>
+      <div class="relay-item"><div class="fan-led" id="monFanLed2"></div><div class="relay-name">Ventola 2<br><span id="monFan2Pct">0%</span> (GPIO18 ENB)</div></div>
     </div>
   </div>
 
@@ -452,17 +523,29 @@ h1{color:#00ff88;text-align:center;padding:15px 0 5px;font-size:1.4em;letter-spa
   <div class="section">
     <h3>📌 PINOUT ESP32 WROOM-32</h3>
     <table class="tbl">
-      <tr><th>Funzione</th><th>GPIO</th><th>Dir</th></tr>
-      <tr><td>Relè 1 — LPF 15/10m</td><td>13</td><td>OUT</td></tr>
-      <tr><td>Relè 2 — LPF 20/17m</td><td>12</td><td>OUT</td></tr>
-      <tr><td>Relè 3 — LPF 40m</td><td>14</td><td>OUT</td></tr>
-      <tr><td>Relè 4 — LPF 80m</td><td>27</td><td>OUT</td></tr>
-      <tr><td>Relè 5 — ATU-100 TUNE</td><td>32</td><td>OUT</td></tr>
-      <tr><td>Relè 6 — Minipa PTT</td><td>25</td><td>OUT</td></tr>
-      <tr><td>Relè 7 — Switch ANT</td><td>33</td><td>OUT</td></tr>
-      <tr><td>SDA I2C (LCD ATU-100)</td><td>21</td><td>I2C</td></tr>
-      <tr><td>SCL I2C (LCD ATU-100)</td><td>22</td><td>I2C</td></tr>
-      <tr><td>LED Status</td><td>2</td><td>OUT</td></tr>
+      <tr><th>Funzione</th><th>GPIO</th><th>Dir</th><th>Note</th></tr>
+      <tr><td>Relè 1 — LPF 15/10m</td><td>13</td><td>OUT</td><td></td></tr>
+      <tr><td>Relè 2 — LPF 20/17m</td><td>12</td><td>OUT</td><td></td></tr>
+      <tr><td>Relè 3 — LPF 40m</td><td>14</td><td>OUT</td><td></td></tr>
+      <tr><td>Relè 4 — LPF 80m</td><td>27</td><td>OUT</td><td></td></tr>
+      <tr><td>Relè 5 — ATU-100 TUNE</td><td>32</td><td>OUT</td><td></td></tr>
+      <tr><td>Relè 6 — Minipa PTT</td><td>25</td><td>OUT</td><td></td></tr>
+      <tr><td>Relè 7 — Switch ANT</td><td>33</td><td>OUT</td><td></td></tr>
+      <tr><td>SDA I2C (LCD ATU-100)</td><td>21</td><td>I2C</td><td></td></tr>
+      <tr><td>SCL I2C (LCD ATU-100)</td><td>22</td><td>I2C</td><td></td></tr>
+      <tr><td>LED Status</td><td>2</td><td>OUT</td><td>⚠ Condiviso con TFT_DC</td></tr>
+      <tr style="color:#00cc66"><td><b>FAN1 PWM (ENA)</b></td><td><b>26</b></td><td>OUT/PWM</td><td>L298N — ledc ch0 20kHz</td></tr>
+      <tr style="color:#00cc66"><td><b>FAN1 DIR (IN1)</b></td><td><b>4</b></td><td>OUT</td><td>L298N — sempre HIGH</td></tr>
+      <tr style="color:#00cc66"><td><b>FAN2 PWM (ENB)</b></td><td><b>18</b></td><td>OUT/PWM</td><td>L298N — ledc ch1 ⚠ TFT CLK</td></tr>
+      <tr style="color:#00cc66"><td><b>FAN2 DIR (IN3)</b></td><td><b>19</b></td><td>OUT</td><td>L298N — sempre HIGH ⚠ TFT MISO</td></tr>
+      <tr style="color:#888"><td>TFT CS</td><td>15</td><td>OUT</td><td>Riservato — non implementato</td></tr>
+      <tr style="color:#888"><td>TFT DC</td><td>2</td><td>OUT</td><td>⚠ Conflitto con LED_STATUS</td></tr>
+      <tr style="color:#888"><td>TFT RST</td><td>0</td><td>OUT</td><td>Riservato</td></tr>
+      <tr style="color:#888"><td>TFT MOSI</td><td>23</td><td>OUT</td><td>Riservato</td></tr>
+      <tr style="color:#888"><td>TFT CLK</td><td>18</td><td>OUT</td><td>⚠ Conflitto con FAN2 PWM</td></tr>
+      <tr style="color:#888"><td>TFT MISO</td><td>19</td><td>IN</td><td>⚠ Conflitto con FAN2 DIR</td></tr>
+      <tr style="color:#888"><td>Touch CS</td><td>5</td><td>OUT</td><td>Riservato</td></tr>
+      <tr style="color:#888"><td>Touch IRQ</td><td>34</td><td>IN</td><td>Input only</td></tr>
     </table>
   </div>
 
@@ -485,8 +568,28 @@ h1{color:#00ff88;text-align:center;padding:15px 0 5px;font-size:1.4em;letter-spa
       <span class="cmd">TUNE</span> → impulso accordo ATU 100ms<br>
       <span class="cmd">ANT:1</span> → seleziona Antenna 1<br>
       <span class="cmd">ANT:2</span> → seleziona Antenna 2<br>
+      <span class="cmd">FAN1:&lt;0-255&gt;</span> → imposta velocità ventola 1<br>
+      <span class="cmd">FAN2:&lt;0-255&gt;</span> → imposta velocità ventola 2<br>
+      <span class="cmd">FAN:&lt;0-255&gt;</span> → imposta entrambe le ventole<br>
       <span class="cmd">STATUS?</span> → diagnostica su porta seriale
     </div>
+  </div>
+
+  <div class="section">
+    <h3>🖥️ DISPLAY TFT TOUCH (PIN RISERVATI)</h3>
+    <p style="color:#666;font-size:.8em;margin-bottom:10px">Libreria TFT non ancora inclusa — pin documentati per espansione futura.</p>
+    <table class="tbl">
+      <tr><th>Segnale</th><th>GPIO</th><th>Nota conflitti</th></tr>
+      <tr><td>TFT CS (ILI9341)</td><td>15</td><td>Libero</td></tr>
+      <tr><td>TFT DC / RS</td><td>2</td><td>⚠ Condiviso con LED_STATUS</td></tr>
+      <tr><td>TFT RST</td><td>0</td><td>Usare -1 se collegato a RST board</td></tr>
+      <tr><td>SPI MOSI</td><td>23</td><td>Libero</td></tr>
+      <tr><td>SPI CLK</td><td>18</td><td>⚠ Condiviso con L298N FAN2_PWM</td></tr>
+      <tr><td>SPI MISO</td><td>19</td><td>⚠ Condiviso con L298N FAN2_DIR</td></tr>
+      <tr><td>Touch CS (XPT2046)</td><td>5</td><td>Libero</td></tr>
+      <tr><td>Touch IRQ</td><td>34</td><td>Input only — Libero</td></tr>
+    </table>
+    <p style="color:#886600;font-size:.78em;margin-top:8px">⚠ Per usare TFT contemporaneamente alle ventole, usare pin SPI alternativi liberi (es. GPIO 16/17 per CLK/MISO e GPIO 2 rimappato).</p>
   </div>
 
   <div class="section">
@@ -503,6 +606,43 @@ h1{color:#00ff88;text-align:center;padding:15px 0 5px;font-size:1.4em;letter-spa
 <script>
 // =========== STATO LOCALE ===========
 var cBand = 0, cAnt = 1;
+
+// =========== FAN ===========
+function onFan1Input(pct) {
+  document.getElementById('fan1Val').textContent = pct + '%';
+  var speed = Math.round(parseInt(pct) * 255 / 100);
+  fetch('/fan?ch=1&v=' + speed).catch(function(){});
+}
+function onFan2Input(pct) {
+  document.getElementById('fan2Val').textContent = pct + '%';
+  var speed = Math.round(parseInt(pct) * 255 / 100);
+  fetch('/fan?ch=2&v=' + speed).catch(function(){});
+}
+function setFanBoth(pct) {
+  var speed = Math.round(pct * 255 / 100);
+  fetch('/fan?ch=0&v=' + speed).catch(function(){});
+  document.getElementById('fan1Slider').value = pct;
+  document.getElementById('fan2Slider').value = pct;
+  document.getElementById('fan1Val').textContent = pct + '%';
+  document.getElementById('fan2Val').textContent = pct + '%';
+  updateFanUI(speed, speed);
+}
+function updateFanUI(s1, s2) {
+  var led1 = document.getElementById('fanLed1');
+  var led2 = document.getElementById('fanLed2');
+  if (led1) led1.classList.toggle('on', s1 > 0);
+  if (led2) led2.classList.toggle('on', s2 > 0);
+  var ml1 = document.getElementById('monFanLed1');
+  var ml2 = document.getElementById('monFanLed2');
+  if (ml1) ml1.classList.toggle('on', s1 > 0);
+  if (ml2) ml2.classList.toggle('on', s2 > 0);
+  var p1 = Math.round(s1 / 255 * 100);
+  var p2 = Math.round(s2 / 255 * 100);
+  var mp1 = document.getElementById('monFan1Pct');
+  var mp2 = document.getElementById('monFan2Pct');
+  if (mp1) mp1.textContent = p1 + '%';
+  if (mp2) mp2.textContent = p2 + '%';
+}
 
 // =========== TABS ===========
 function showTab(n) {
@@ -635,6 +775,16 @@ function pollStatus() {
     // Sync dashboard state
     if (cBand !== parseInt(d.band)) { cBand = parseInt(d.band); updateBandUI(); }
     if (cAnt  !== parseInt(d.ant))  { cAnt  = parseInt(d.ant);  updateAntUI(); }
+    // Fan state
+    var s1 = parseInt(d.fan1) || 0;
+    var s2 = parseInt(d.fan2) || 0;
+    var p1 = Math.round(s1 / 255 * 100);
+    var p2 = Math.round(s2 / 255 * 100);
+    var sl1 = document.getElementById('fan1Slider');
+    var sl2 = document.getElementById('fan2Slider');
+    if (sl1) { sl1.value = p1; document.getElementById('fan1Val').textContent = p1 + '%'; }
+    if (sl2) { sl2.value = p2; document.getElementById('fan2Val').textContent = p2 + '%'; }
+    updateFanUI(s1, s2);
     // Sync settings selects
     document.getElementById('prefBand').value = d.band;
     document.getElementById('prefAnt').value  = d.ant;
@@ -666,6 +816,9 @@ void setup() {
 
   // Inizializza pin relè
   setupPins();
+
+  // Inizializza ventole L298N
+  setupFans();
 
   // WiFi
   setupWiFi();
@@ -724,6 +877,30 @@ void setupPins() {
   setAnt(g_ant);
 }
 
+void setupFans() {
+  ledcSetup(FAN_CH1, FAN_PWM_FREQ, FAN_PWM_RES);
+  ledcAttachPin(PIN_FAN1_PWM, FAN_CH1);
+  ledcSetup(FAN_CH2, FAN_PWM_FREQ, FAN_PWM_RES);
+  ledcAttachPin(PIN_FAN2_PWM, FAN_CH2);
+  pinMode(PIN_FAN1_DIR, OUTPUT);
+  digitalWrite(PIN_FAN1_DIR, HIGH);
+  pinMode(PIN_FAN2_DIR, OUTPUT);
+  digitalWrite(PIN_FAN2_DIR, HIGH);
+  ledcWrite(FAN_CH1, 0);
+  ledcWrite(FAN_CH2, 0);
+  Serial.println(F("Ventole L298N inizializzate (OFF)"));
+}
+
+void setFan1(uint8_t speed) {
+  g_fan1Speed = speed;
+  ledcWrite(FAN_CH1, speed);
+}
+
+void setFan2(uint8_t speed) {
+  g_fan2Speed = speed;
+  ledcWrite(FAN_CH2, speed);
+}
+
 void setupWiFi() {
   WiFi.mode(WIFI_AP_STA);
 
@@ -759,6 +936,7 @@ void setupWebServer() {
   g_server.on("/ptt",       HTTP_GET, handlePTT);
   g_server.on("/ant",       HTTP_GET, handleAnt);
   g_server.on("/tune",      HTTP_GET, handleTune);
+  g_server.on("/fan",       HTTP_GET, handleFan);
   g_server.on("/wifi/connect",    HTTP_GET, handleWiFiConnect);
   g_server.on("/wifi/disconnect", HTTP_GET, handleWiFiDisconnect);
   g_server.on("/wifi/scan",       HTTP_GET, handleWiFiScan);
@@ -945,6 +1123,25 @@ void processSerialCommand(const String& cmd) {
       Serial.println(F("ERR: antenna non valida (1 o 2)"));
     }
 
+  } else if (cmd.startsWith("FAN1:")) {
+    int v = cmd.substring(5).toInt();
+    uint8_t speed = (uint8_t)constrain(v, 0, 255);
+    setFan1(speed);
+    Serial.printf("Ventola 1 velocità: %d\n", speed);
+
+  } else if (cmd.startsWith("FAN2:")) {
+    int v = cmd.substring(5).toInt();
+    uint8_t speed = (uint8_t)constrain(v, 0, 255);
+    setFan2(speed);
+    Serial.printf("Ventola 2 velocità: %d\n", speed);
+
+  } else if (cmd.startsWith("FAN:")) {
+    int v = cmd.substring(4).toInt();
+    uint8_t speed = (uint8_t)constrain(v, 0, 255);
+    setFan1(speed);
+    setFan2(speed);
+    Serial.printf("Ventole 1+2 velocità: %d\n", speed);
+
   } else if (cmd == "STATUS?") {
     Serial.println(F("--- STATUS ---"));
     Serial.printf("Firmware: v%s  Build: %s\n", FIRMWARE_VERSION, BUILD_DATE);
@@ -967,10 +1164,11 @@ void processSerialCommand(const String& cmd) {
     Serial.printf("LCD L1  : [%s]\n", g_lcd1);
     Serial.printf("LCD L2  : [%s]\n", g_lcd2);
     Serial.printf("Watt    : %.1f  SWR: %.2f\n", g_watts, g_swr);
+    Serial.printf("Ventola1: %d/255  Ventola2: %d/255\n", g_fan1Speed, g_fan2Speed);
 
   } else {
     Serial.printf("ERR: comando sconosciuto: %s\n", cmd.c_str());
-    Serial.println(F("Comandi: BAND:80/40/20/15, PTT:1/0, TUNE, ANT:1/2, STATUS?"));
+    Serial.println(F("Comandi: BAND:80/40/20/15, PTT:1/0, TUNE, ANT:1/2, FAN1:<0-255>, FAN2:<0-255>, FAN:<0-255>, STATUS?"));
   }
 }
 
@@ -1145,7 +1343,9 @@ void handleStatus() {
   json += "\"staIp\":\""   + ip_sta                   + "\",";
   json += "\"wifiSta\":\""  + wifiSta                 + "\",";
   json += "\"fwVer\":\""   + String(FIRMWARE_VERSION) + "\",";
-  json += "\"fwDate\":\""  + String(BUILD_DATE) + " " + String(BUILD_TIME) + "\"";
+  json += "\"fwDate\":\""  + String(BUILD_DATE) + " " + String(BUILD_TIME) + "\",";
+  json += "\"fan1\":"      + String(g_fan1Speed) + ",";
+  json += "\"fan2\":"      + String(g_fan2Speed);
   json += "}";
 
   g_server.sendHeader("Access-Control-Allow-Origin", "*");
@@ -1185,6 +1385,22 @@ void handleAnt() {
 void handleTune() {
   triggerTune();
   g_server.send(200, "application/json", "{\"tune\":true}");
+}
+
+// /fan?ch=<0|1|2>&v=<0-255>
+// ch=0 → entrambe, ch=1 → ventola 1, ch=2 → ventola 2
+void handleFan() {
+  if (!g_server.hasArg("ch") || !g_server.hasArg("v")) {
+    g_server.send(200, "application/json", "{\"ok\":false,\"msg\":\"Parametri mancanti\"}");
+    return;
+  }
+  int ch    = g_server.arg("ch").toInt();
+  uint8_t speed = (uint8_t)constrain(g_server.arg("v").toInt(), 0, 255);
+  if (ch == 0) { setFan1(speed); setFan2(speed); }
+  else if (ch == 1) { setFan1(speed); }
+  else if (ch == 2) { setFan2(speed); }
+  g_server.send(200, "application/json",
+    "{\"ok\":true,\"fan1\":" + String(g_fan1Speed) + ",\"fan2\":" + String(g_fan2Speed) + "}");
 }
 
 // /wifi/connect?ssid=...&pass=...
